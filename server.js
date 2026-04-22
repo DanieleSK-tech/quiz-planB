@@ -1,14 +1,42 @@
 const express = require('express');
 const cors = require('cors');
 const yaml = require('js-yaml'); // Assicurati di aver fatto npm install js-yaml
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 
 const app = express();
 const PORT = 3000;
 
+// ==========================================
+// CONFIGURAZIONE DATABASE SQLITE (Audit Trail)
+// ==========================================
+
+// Crea o apri il file del database
+const dbPath = path.resolve(__dirname, 'winners_log.db');
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('❌ Errore apertura database SQLite:', err.message);
+  } else {
+    console.log('✅ Connesso al database SQLite (winners_log.db)');
+    
+    // Crea la tabella se non esiste
+    db.run(`CREATE TABLE IF NOT EXISTS winners (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      invoice TEXT NOT NULL,
+      amount_sats INTEGER NOT NULL,
+      transaction_id TEXT,
+      status TEXT NOT NULL
+    )`, (err) => {
+      if (err) console.error('❌ Errore creazione tabella:', err.message);
+      else console.log('✅ Tabella winners pronta');
+    });
+  }
+});
+
 app.use(cors());
 app.use(express.json());
 // Serviamo i file statici dalla cartella 'public'
-const path = require('path');
 app.use(express.static(path.join(__dirname, 'public')));;
 // ==========================================
 // FUNZIONI DI AIUTO (Helpers)
