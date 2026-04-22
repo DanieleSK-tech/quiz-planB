@@ -1,0 +1,6 @@
+POST http://localhost:3000/api/paga
+Content-Type: application/json
+
+{
+  "fattura": "lnbcrt15u1p57f8l5pp5f2kffd3ve38k6020vgtspwa6dpsgjnzhpa23yes9dv30qrpvxegsdqqcqzzsxqyz5vqsp5dhfrd9zn6unz73r82wtwt29wuecdgucvwx4pndqgw82lhtackfts9qxpqysgqcpjzxzg0les7cgz2d3af4kshwq7dygtcupweujpnldp5eltrze3s5gpggrheprks4903dd3lrnl9kw7ve5eh0u2qcnpxsdrl7e09kysqghmq7z"
+}

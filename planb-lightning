@@ -1,0 +1,6 @@
+const lnService = require('ln-service');
+
+// 1. INCOLLA QUI I VALORI PRESI DA POLAR (Assicurati di aver selezionato Base64 in Polar!)
+const GRPC_HOST = 'INCOLLA_QUI_IL_GRPC_HOST'; // Es: '127.0.0.1:10001'
+const TLS_CERT = 'INCOLLA_QUI_LA_LUNGA_STRINGA_DEL_TLS_CERT';
+const ADMIN_MACAROON = 'INCOLL
