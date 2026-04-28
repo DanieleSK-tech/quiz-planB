@@ -29,19 +29,20 @@
     <!-- Qui apparirà la domanda -->
     <h3 id="testo-domanda">Caricamento domanda...</h3>
     <div id="contenitore-opzioni"></div>
+<!-- MANCAVA — riga dopo i bottoni opzioni -->
+<p id="messaggio"></p>
 
+<!-- MANCAVA — bottone per andare alla domanda successiva -->
+<button id="btn-prossima" onclick="caricaDomanda()" style="display:none">➡️ Prossima domanda</button>
     <!-- Sezione che appare solo se si vince -->
-    <div id="sezione-pagamento">
-      <h3 style="color: #28a745;">🎉 Esatto! Hai vinto 1500 sats!</h3>
-      <p>Crea una fattura Lightning (Invoice) da 1500 sats e incollala qui sotto:</p>
-      <input type="text" id="input-fattura" placeholder="lnbc...">
-      <button id="btn-paga" onclick="pagaVincitore()">Invia i miei Satoshi!</button>
-      <p id="stato-pagamento"></p>
-    </div>
-    
-    <div id="messaggio"></div>
-    <button id="btn-prossima" style="display:none; margin-top: 20px; padding: 10px;" onclick="caricaDomanda()">Prossima Domanda</button>
-  </div>
+    <!-- Sezione che appare solo se si vince -->
+<div id="sezione-pagamento">
+  <h3 style="color: #28a745;">🎉 Esatto! Hai vinto 1 sat!</h3>
+  <p>Inserisci il tuo <strong>Lightning Address</strong> per ricevere i satoshi:</p>
+  <input type="text" id="input-fattura" placeholder="nome@dominio.com">
+  <button id="btn-paga" onclick="pagaVincitore()">Invia i miei Satoshi!</button>
+  <p id="stato-pagamento"></p>
+</div>
 
   <script>
     let rispostaCorrettaCorrente = "";
@@ -96,40 +97,40 @@
 
     // 3. PAGAMENTO DELLA FATTURA TRAMITE IL SERVER
     async function pagaVincitore() {
-      const stringaFattura = document.getElementById('input-fattura').value;
-      const statoTesto = document.getElementById('stato-pagamento');
-      
-      if(!stringaFattura.startsWith('lnbc')) {
-        statoTesto.innerText = '⚠️ Inserisci una fattura Lightning valida!';
-        statoTesto.style.color = 'red';
-        return;
-      }
+  const lightningAddress = document.getElementById('input-fattura').value.trim();
+  const statoTesto = document.getElementById('stato-pagamento');
 
-      statoTesto.innerText = '⏳ Pagamento in corso, attendere...';
-      statoTesto.style.color = 'white';
+  // Validazione: controlla che sia un formato tipo nome@dominio.com
+  if (!lightningAddress.includes('@') || !lightningAddress.includes('.')) {
+    statoTesto.innerText = '⚠️ Inserisci un Lightning Address valido (es. nome@dominio.com)';
+    statoTesto.style.color = 'red';
+    return;
+  }
 
-      try {
-        // Chiamiamo la rotta POST del nostro server Node.js
-        const response = await fetch('http://localhost:3000/api/paga', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fattura: stringaFattura })
-        });
+  statoTesto.innerText = '⏳ Pagamento in corso, attendere...';
+  statoTesto.style.color = 'white';
 
-        const risultato = await response.json();
+  try {
+    const response = await fetch('http://localhost:3000/api/paga', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lightningAddress: lightningAddress })
+    });
 
-        if (response.ok && risultato.successo) {
-          statoTesto.innerText = risultato.messaggio;
-          statoTesto.style.color = '#28a745';
-          document.getElementById('btn-prossima').style.display = 'inline-block';
-        } else {
-          statoTesto.innerText = risultato.errore;
-          statoTesto.style.color = '#dc3545';
-        }
-      } catch (error) {
-        statoTesto.innerText = '❌ Errore di comunicazione col server.';
-      }
+    const risultato = await response.json();
+
+    if (response.ok && risultato.successo) {
+      statoTesto.innerText = '✅ ' + risultato.messaggio;
+      statoTesto.style.color = '#28a745';
+      document.getElementById('btn-prossima').style.display = 'inline-block';
+    } else {
+      statoTesto.innerText = '❌ ' + risultato.errore;
+      statoTesto.style.color = '#dc3545';
     }
+  } catch (error) {
+    statoTesto.innerText = '❌ Errore di comunicazione col server.';
+  }
+}
 
     // Carica la prima domanda all'avvio della pagina
     window.onload = caricaDomanda;
