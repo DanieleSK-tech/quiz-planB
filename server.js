@@ -49,6 +49,24 @@ const db = new sqlite3.Database(dbPath, (err) => {
       if (err) console.error('❌ Table error:', err.message);
       else console.log('✅ Payments table ready');
     });
+
+    // CHIAVE: lightning_address — sempre univoca per ogni utente
+    // username: alias leggibile (es. "Mario") — opzionale
+    // email: contatto opzionale — NON usata come chiave
+    db.run(`CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lightning_address TEXT UNIQUE NOT NULL,
+      username TEXT,
+      email TEXT,
+      lnbits_user_id TEXT,
+      lnbits_wallet_id TEXT,
+      lnbits_wallet_inkey TEXT,
+      lnbits_wallet_adminkey TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+      if (err) console.error('❌ Table error:', err.message);
+      else console.log('✅ Users table ready');
+    });
   }
 });
 
@@ -74,7 +92,8 @@ function hasAlreadyPlayedToday(lightningAddress) {
 
 function logAttempt(lightningAddress, score, total, satsEarned, status) {
   db.run(
-    `INSERT INTO attempts (lightning_address, date, score, total, sats_earned, status) VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO attempts (lightning_address, date, score, total, sats_earned, status)
+     VALUES (?, ?, ?, ?, ?, ?)`,
     [lightningAddress, getToday(), score, total, satsEarned, status],
     function(err) {
       if (err) console.error('❌ Attempt log error:', err.message);
@@ -85,13 +104,28 @@ function logAttempt(lightningAddress, score, total, satsEarned, status) {
 
 function logPayment(lightningAddress, amount, transactionId, status) {
   db.run(
-    `INSERT INTO payments (lightning_address, amount_sats, transaction_id, status) VALUES (?, ?, ?, ?)`,
+    `INSERT INTO payments (lightning_address, amount_sats, transaction_id, status)
+     VALUES (?, ?, ?, ?)`,
     [lightningAddress, amount, transactionId, status],
     function(err) {
       if (err) console.error('❌ Payment log error:', err.message);
       else console.log(`💰 Payment saved: ${lightningAddress} — ${amount} sats`);
     }
   );
+}
+
+// Recupera wallet custodiale tramite lightning_address (chiave univoca)
+function getUserWallet(lightningAddress) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM users WHERE lightning_address = ?`,
+      [lightningAddress],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row || null);
+      }
+    );
+  });
 }
 
 // ==========================================
@@ -111,7 +145,6 @@ function getPersonalizedQuestionIds(lightningAddress, count = 5) {
   for (let i = 0; i < seedStr.length; i++) {
     seed += seedStr.charCodeAt(i) * (i + 1);
   }
-
   const rng = seededRandom(seed);
   const shuffled = [...QUESTION_IDS];
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -134,7 +167,11 @@ function shuffleArray(array) {
 // QUIZ DATA
 // ==========================================
 const BASE_RAW_URL = 'https://raw.githubusercontent.com/PlanB-Network/bitcoin-educational-content/dev/courses/btc101/quizz';
-const QUESTION_IDS = ['001','002','003','004','005','006','007','008','009','010','011','012','013','014','015','016','017','018','019','020','021'];
+const QUESTION_IDS = [
+  '001','002','003','004','005','006','007',
+  '008','009','010','011','012','013','014',
+  '015','016','017','018','019','020','021'
+];
 const QUESTIONS_PER_DAY = 5;
 
 async function fetchQuestion(id, lang = 'en') {
@@ -145,9 +182,20 @@ async function fetchQuestion(id, lang = 'en') {
 }
 
 // ==========================================
+// LIGHTNING CONFIG (LNbits)
+// ⬅️ Sostituire con le credenziali reali di Squad 3
+// ==========================================
+const LNBITS_URL = 'http://localhost:5000';
+const LNBITS_ADMIN_KEY = '9915b2c6dd794e308961c5c5987884ad';
+
+// ==========================================
 // ROUTES
 // ==========================================
 
+// ------------------------------------------
+// POST /api/start
+// Body: { lightningAddress }
+// ------------------------------------------
 app.post('/api/start', async (req, res) => {
   const { lightningAddress } = req.body;
 
@@ -190,15 +238,20 @@ app.post('/api/start', async (req, res) => {
   }
 });
 
-// ==========================================
-// LIGHTNING CONFIG (LNbits)
-// ==========================================
-const LNBITS_URL = 'https://demo.lnbits.com';
-const LNBITS_ADMIN_KEY = 'fb180207afaa400e97781e9fdd3a58e0';
-
+// ------------------------------------------
+// POST /api/submit
+// Body: { lightningAddress, score, total }
+//
+// PERCORSO A — Wallet custodiale (Steps 3 + 4)
+//   Step 3: crea invoice dal wallet utente  (out: false)
+//   Step 4: Big Pot paga invoice            (out: true)
+//
+// PERCORSO B — Fallback LNURL esterno
+//   Usato se utente non ha ancora wallet custodiale
+// ------------------------------------------
 app.post('/api/submit', async (req, res) => {
   const { lightningAddress, score, total } = req.body;
-  const satsEarned = score;
+  const satsEarned = (score === total) ? 1500 : 0;
 
   if (!lightningAddress || score === undefined || total === undefined) {
     return res.status(400).json({ errore: 'Missing data.' });
@@ -209,49 +262,123 @@ app.post('/api/submit', async (req, res) => {
   if (satsEarned === 0) {
     return res.json({
       successo: true,
-      messaggio: `You scored ${score}/${total}. No sats earned this time. Come back tomorrow!`,
+      messaggio: `You scored ${score}/${total}. You need 5/5 to earn 1500 sats! Come back tomorrow ⚡`,
       satsEarned: 0
     });
   }
 
   try {
-    const amountMsat = satsEarned * 1000;
-    const [user, domain] = lightningAddress.split('@');
-    const lnurlpUrl = `https://${domain}/.well-known/lnurlp/${user}`;
+    const userWallet = await getUserWallet(lightningAddress);
 
-    console.log(`⚡ Paying ${satsEarned} sats to ${lightningAddress}`);
+    if (userWallet && userWallet.lnbits_wallet_inkey) {
+      // ==========================================
+      // PERCORSO A — Wallet custodiale (Steps 3 + 4)
+      // ==========================================
+      console.log(`⚡ Internal custodial payment: ${satsEarned} sats → ${lightningAddress}`);
+
+      // STEP 3 — Crea invoice dal wallet custodiale dell'utente
+      // out: false = crea invoice (ricevi fondi in entrata)
+      const invoiceResponse = await fetch(`${LNBITS_URL}/api/v1/payments`, {
+        method: 'POST',
+        headers: {
+          'X-Api-Key': userWallet.lnbits_wallet_inkey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          out: false,
+          amount: satsEarned,
+          memo: `Quiz reward — ${score}/${total} correct answers! ⚡`
+        })
+      });
+
+      if (!invoiceResponse.ok) {
+        const errorText = await invoiceResponse.text();
+        throw new Error(`Step 3 failed — invoice creation: ${errorText}`);
+      }
+
+      const invoiceData = await invoiceResponse.json();
+      const bolt11Invoice = invoiceData.payment_request;
+
+      if (!bolt11Invoice) {
+        throw new Error('Step 3 failed — missing payment_request from LNbits');
+      }
+
+      console.log(`📄 Step 3 OK — Invoice created for ${satsEarned} sats`);
+
+      // STEP 4 — Il Big Pot (Admin wallet) paga la invoice del Step 3
+      // out: true = paga invoice (invia fondi in uscita)
+      const paymentResponse = await fetch(`${LNBITS_URL}/api/v1/payments`, {
+        method: 'POST',
+        headers: {
+          'X-Api-Key': LNBITS_ADMIN_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          out: true,
+          bolt11: bolt11Invoice
+        })
+      });
+
+      const paymentData = await paymentResponse.json();
+
+      if (!paymentResponse.ok) {
+        throw new Error(`Step 4 failed — ${paymentData.detail || 'LNbits payment error'}`);
+      }
+
+      console.log(`✅ Step 4 OK — Big Pot paid ${satsEarned} sats into wallet of ${lightningAddress}`);
+      logPayment(lightningAddress, satsEarned, paymentData.payment_hash, 'SUCCESS_INTERNAL');
+
+      return res.json({
+        successo: true,
+        messaggio: `🎉 ${score}/${total} correct! ${satsEarned} sats added to your custodial wallet!`,
+        satsEarned,
+        transactionId: paymentData.payment_hash,
+        tipo: 'custodial_internal'
+      });
+    }
+
+    // ==========================================
+    // PERCORSO B — Fallback LNURL esterno
+    // ==========================================
+    console.log(`⚡ External LNURL fallback: ${satsEarned} sats → ${lightningAddress}`);
+
+    const amountMsat = satsEarned * 1000;
+    const [lnUser, lnDomain] = lightningAddress.split('@');
+    const lnurlpUrl = `https://${lnDomain}/.well-known/lnurlp/${lnUser}`;
 
     const lnurlResponse = await fetch(lnurlpUrl);
     if (!lnurlResponse.ok) throw new Error(`Lightning Address not found`);
+
     const lnurlData = await lnurlResponse.json();
     if (lnurlData.status === 'ERROR') throw new Error(lnurlData.reason);
 
     if (amountMsat < lnurlData.minSendable || amountMsat > lnurlData.maxSendable) {
-      throw new Error(`Amount out of range: min ${lnurlData.minSendable/1000} sat`);
+      throw new Error(`Amount out of range: min ${lnurlData.minSendable / 1000} sat`);
     }
 
     const callbackUrl = `${lnurlData.callback}?amount=${amountMsat}`;
-    const invoiceResponse = await fetch(callbackUrl);
-    const invoiceData = await invoiceResponse.json();
-    if (invoiceData.status === 'ERROR') throw new Error(invoiceData.reason);
+    const extInvoiceResponse = await fetch(callbackUrl);
+    const extInvoiceData = await extInvoiceResponse.json();
+    if (extInvoiceData.status === 'ERROR') throw new Error(extInvoiceData.reason);
 
-    const paymentResponse = await fetch(`${LNBITS_URL}/api/v1/payments`, {
+    const extPaymentResponse = await fetch(`${LNBITS_URL}/api/v1/payments`, {
       method: 'POST',
       headers: { 'X-Api-Key': LNBITS_ADMIN_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ out: true, bolt11: invoiceData.pr })
+      body: JSON.stringify({ out: true, bolt11: extInvoiceData.pr })
     });
 
-    const paymentData = await paymentResponse.json();
-    if (!paymentResponse.ok) throw new Error(paymentData.detail || 'LNbits error');
+    const extPaymentData = await extPaymentResponse.json();
+    if (!extPaymentResponse.ok) throw new Error(extPaymentData.detail || 'LNbits error');
 
-    console.log(`✅ Payment OK! ${satsEarned} sats → ${lightningAddress}`);
-    logPayment(lightningAddress, satsEarned, paymentData.payment_hash, 'SUCCESS');
+    console.log(`✅ External payment OK! ${satsEarned} sats → ${lightningAddress}`);
+    logPayment(lightningAddress, satsEarned, extPaymentData.payment_hash, 'SUCCESS_EXTERNAL');
 
     res.json({
       successo: true,
       messaggio: `🎉 ${score}/${total} correct! ${satsEarned} sats sent to ${lightningAddress}!`,
       satsEarned,
-      transactionId: paymentData.payment_hash
+      transactionId: extPaymentData.payment_hash,
+      tipo: 'external_lnurl'
     });
 
   } catch (error) {
@@ -264,6 +391,10 @@ app.post('/api/submit', async (req, res) => {
   }
 });
 
+// ------------------------------------------
+// GET /api/logs
+// Ritorna storico di tutti i tentativi
+// ------------------------------------------
 app.get('/api/logs', (req, res) => {
   db.all("SELECT * FROM attempts ORDER BY timestamp DESC", [], (err, rows) => {
     if (err) return res.status(500).json({ errore: 'DB Error' });
@@ -271,4 +402,144 @@ app.get('/api/logs', (req, res) => {
   });
 });
 
+// ------------------------------------------
+// POST /api/create-user
+// Body: { lightningAddress, username?, email? }
+//
+// lightningAddress → OBBLIGATORIA, chiave univoca
+// username         → opzionale, alias leggibile
+// email            → opzionale, solo per contatto
+// ------------------------------------------
+app.post('/api/create-user', async (req, res) => {
+  const { lightningAddress, username, email } = req.body;
+
+  if (!lightningAddress || !lightningAddress.includes('@') || !lightningAddress.includes('.')) {
+    return res.status(400).json({ error: 'A valid Lightning Address is required (e.g. mario@wallet.com)' });
+  }
+
+  db.get(`SELECT * FROM users WHERE lightning_address = ?`, [lightningAddress], async (err, existingUser) => {
+    if (err) return res.status(500).json({ error: 'DB error' });
+
+    // Utente già registrato → ritorna dati salvati senza ricreare nulla su LNbits
+    if (existingUser) {
+      console.log(`👤 User ${lightningAddress} already exists, returning saved wallet`);
+      return res.json({
+        success: true,
+        already_existed: true,
+        lightningAddress: existingUser.lightning_address,
+        username: existingUser.username,
+        lnbits_user_id: existingUser.lnbits_user_id,
+        lnbits_wallet_id: existingUser.lnbits_wallet_id,
+        message: `Welcome back ${existingUser.username || lightningAddress}! Wallet already active. ⚡`
+      });
+    }
+
+    // Nuovo utente → crea utente + wallet su LNbits tramite User Manager
+    try {
+      const lnbitsResponse = await fetch(`${LNBITS_URL}/usermanager/api/v1/users`, {
+        method: 'POST',
+        headers: {
+          'X-Api-Key': LNBITS_ADMIN_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          user_name: lightningAddress,
+          wallet_name: `${lightningAddress}_wallet`,
+          email: email || '',
+          password: ''
+        })
+      });
+
+      if (!lnbitsResponse.ok) {
+        const errorText = await lnbitsResponse.text();
+        throw new Error(`LNbits User Manager error: ${errorText}`);
+      }
+
+      const data = await lnbitsResponse.json();
+      console.log(`✅ LNbits user created for ${lightningAddress} → wallet ${data.wallets[0].id}`);
+
+      // Salva nel DB locale con i tre campi ben separati
+      db.run(
+        `INSERT INTO users
+          (lightning_address, username, email,
+           lnbits_user_id, lnbits_wallet_id, lnbits_wallet_inkey, lnbits_wallet_adminkey)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          lightningAddress,
+          username || '',
+          email || '',
+          data.id,
+          data.wallets[0].id,
+          data.wallets[0].inkey,
+          data.wallets[0].adminkey
+        ],
+        function(dbErr) {
+          if (dbErr) console.error('❌ User save error:', dbErr.message);
+          else console.log(`💾 User ${lightningAddress} saved to local DB`);
+        }
+      );
+
+      res.json({
+        success: true,
+        already_existed: false,
+        lightningAddress,
+        username: username || '',
+        lnbits_user_id: data.id,
+        lnbits_wallet_id: data.wallets[0].id,
+        message: `✅ Custodial wallet created for ${lightningAddress}!`
+      });
+
+    } catch (err) {
+      console.error('❌ Error creating LNbits user:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+});
+
+// ------------------------------------------
+// GET /api/wallet-balance/:lightningAddress
+// Esempio: GET /api/wallet-balance/mario@wallet.com
+// ------------------------------------------
+app.get('/api/wallet-balance/:lightningAddress', async (req, res) => {
+  const { lightningAddress } = req.params;
+
+  db.get(
+    `SELECT username, lnbits_wallet_id, lnbits_wallet_inkey FROM users WHERE lightning_address = ?`,
+    [lightningAddress],
+    async (err, row) => {
+      if (err || !row) {
+        return res.status(404).json({
+          error: `User ${lightningAddress} not found. Register first via POST /api/create-user`
+        });
+      }
+
+      try {
+        const response = await fetch(`${LNBITS_URL}/api/v1/wallet`, {
+          headers: { 'X-Api-Key': row.lnbits_wallet_inkey }
+        });
+
+        if (!response.ok) throw new Error('Failed to fetch wallet from LNbits');
+
+        const walletData = await response.json();
+
+        res.json({
+          success: true,
+          lightningAddress,
+          username: row.username || '',
+          wallet_id: row.lnbits_wallet_id,
+          balance_msat: walletData.balance,
+          balance_sats: Math.floor(walletData.balance / 1000)
+        });
+
+      } catch (err) {
+        console.error('❌ Wallet balance error:', err.message);
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+});
+
+// ==========================================
+// SERVER START — sempre ultima riga
+// ==========================================
 app.listen(PORT, () => console.log(`🚀 Server running: http://localhost:${PORT}`));
