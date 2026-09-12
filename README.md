@@ -112,7 +112,7 @@ BIGPOT_INVOICE_KEY=your_reward_wallet_invoice_key
 Start the application:
 
 ```bash
-node server.js
+npm server.js
 ```
 
 Open the application in your browser:
