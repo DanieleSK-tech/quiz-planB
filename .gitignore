@@ -1,1 +1,20 @@
-node_modules
+# Node.js dependencies
+node_modules/
+
+# Environment variables and secret credentials
+.env
+.env.local
+.env.*.local
+
+# SQLite local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+npm-debug.log*
+
+# Operating system files
+.DS_Store
+Thumbs.db
